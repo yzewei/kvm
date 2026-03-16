@@ -12,7 +12,14 @@ use bitflags::bitflags;
 use kvm_bindings::*;
 use std::fs::File;
 use std::os::raw::c_void;
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "aarch64",
+    target_arch = "riscv64"
+))]
 use std::os::raw::{c_int, c_ulong};
+#[cfg(target_arch = "loongarch64")]
+use std::os::raw::c_ulong;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 
 use crate::cap::Cap;
@@ -950,8 +957,15 @@ impl VmFd {
     /// # let kvm = Kvm::new().unwrap();
     /// # let vm = kvm.create_vm().unwrap();
     /// // This example is based on https://lwn.net/Articles/658511/.
-    /// let mem_size = 0x4000;
-    /// let guest_addr: u64 = 0x1000;
+    /// let page_size = unsafe { libc::sysconf(libc::_SC_PAGESIZE) as usize };
+    /// #[cfg(target_arch = "loongarch64")]
+    /// let (mem_size, guest_addr) = if page_size == 0x4000 {
+    ///    (0x10000, 0x10000u64)
+    /// } else {
+    ///    (0x4000, 0x1000u64)
+    /// };
+    /// #[cfg(not(target_arch = "loongarch64"))]
+    /// let (mem_size, guest_addr) = (0x4000, 0x1000u64);
     /// let load_addr: *mut u8 = unsafe {
     ///     libc::mmap(
     ///         null_mut(),
@@ -991,7 +1005,12 @@ impl VmFd {
     ///     0x23, 0x20, 0x75, 0x00, // sw t2, a0;       trigger MMIO exit
     ///     0x6f, 0x00, 0x00, 0x00, // j .;shouldn't get here, but if so loop forever
     /// ];
-    ///
+    /// #[cfg(target_arch = "loongarch64")]
+    /// let asm_code = [
+    /// 0x8e, 0x01, 0x80, 0x29, /* st.w $t2, $t0, 0 */
+    /// 0xae, 0x01, 0x80, 0x29, /* st.w $t2, $t1, 0 */
+    /// 0x00, 0x00, 0x00, 0x50, /* b . */
+    /// ];
     /// // Write the code in the guest memory. This will generate a dirty page.
     /// unsafe {
     ///     let mut slice = slice::from_raw_parts_mut(load_addr, mem_size);
@@ -1036,6 +1055,15 @@ impl VmFd {
     ///     let mmio_addr: u64 = guest_addr + mem_size as u64;
     ///     vcpu_fd.set_one_reg(core_reg_base, &guest_addr.to_le_bytes()); // set PC
     ///     vcpu_fd.set_one_reg(core_reg_base + 10, &mmio_addr.to_le_bytes()); // set A0
+    /// }
+    /// #[cfg(target_arch = "loongarch64")]
+    /// {
+    ///     let mut vcpu_regs = vcpu_fd.get_regs().unwrap();
+    ///     vcpu_regs.pc = guest_addr;
+    ///     vcpu_regs.gpr[12] = guest_addr + 0x20; // t0: RAM mem addr
+    ///     vcpu_regs.gpr[13] = 0x5000;            // t1: MMIO addr
+    ///     vcpu_regs.gpr[14] = 1;                 // t2: writen va
+    ///     vcpu_fd.set_regs(&vcpu_regs).unwrap();
     /// }
     ///
     /// loop {
@@ -1415,7 +1443,7 @@ impl VmFd {
     /// // whether the device type is supported. This will not create the device.
     /// // To create the device the flag needs to be removed.
     /// let mut device = kvm_bindings::kvm_create_device {
-    ///     #[cfg(target_arch = "x86_64")]
+    ///     #[cfg(any(target_arch = "x86_64", target_arch = "loongarch64"))]
     ///     type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
     ///     #[cfg(target_arch = "aarch64")]
     ///     type_: kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
@@ -1427,7 +1455,7 @@ impl VmFd {
     /// // On ARM, creating VGICv3 may fail due to hardware dependency.
     /// // Retry to create VGICv2 in that case.
     /// let device_fd = vm.create_device(&mut device).unwrap_or_else(|_| {
-    ///     #[cfg(target_arch = "x86_64")]
+    ///     #[cfg(any(target_arch = "x86_64", target_arch = "loongarch64"))]
     ///     panic!("Cannot create VFIO device.");
     ///     #[cfg(target_arch = "aarch64")]
     ///     {
@@ -2857,7 +2885,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64")))]
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64", target_arch = "loongarch64")))]
     fn test_enable_cap_failure() {
         let kvm = Kvm::new().unwrap();
         let vm = kvm.create_vm().unwrap();

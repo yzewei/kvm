@@ -65,8 +65,8 @@
 //! use kvm_bindings::KVM_MEM_LOG_DIRTY_PAGES;
 //! use kvm_bindings::kvm_userspace_memory_region;
 //!
-//! let mem_size = 0x4000;
-//! let guest_addr = 0x1000;
+//! let mem_size = 0x10000;
+//! let guest_addr = 0x10000;
 //! let asm_code: &[u8];
 //!
 //! // Setting up architectural dependent values.
@@ -103,7 +103,14 @@
 //!         0x6f, 0x00, 0x00, 0x00, // j .;shouldn't get here, but if so loop forever
 //!     ];
 //! }
-//!
+//! #[cfg(target_arch = "loongarch64")]
+//! {
+//!     asm_code = &[
+//!         0x8e, 0x01, 0x80, 0x29, /* st.w $t2, $t0, 0 */
+//!         0xae, 0x01, 0x80, 0x29, /* st.w $t2, $t1, 0 */
+//!         0x00, 0x00, 0x00, 0x50, /* b . */
+//!     ];
+//! }
 //! // 1. Instantiate KVM.
 //! let kvm = Kvm::new().unwrap();
 //!
@@ -186,6 +193,16 @@
 //!     vcpu_fd.set_one_reg(core_reg_base + 10, &mmio_addr.to_le_bytes());
 //! }
 //!
+//! #[cfg(target_arch = "loongarch64")]
+//! {
+//!     let mut vcpu_regs = vcpu_fd.get_regs().unwrap();
+//!     vcpu_regs.pc = guest_addr;
+//!     vcpu_regs.gpr[12] = guest_addr + 0x20; // t0: RAM mem addr
+//!     vcpu_regs.gpr[13] = 0x5000;            // t1: MMIO addr
+//!     vcpu_regs.gpr[14] = 1;                 // t2: writen va
+//!     vcpu_fd.set_regs(&vcpu_regs).unwrap();
+//! }
+//!
 //! // 6. Run code on the vCPU.
 //! loop {
 //!     match vcpu_fd.run().expect("run failed") {
@@ -216,7 +233,7 @@
 //!             // Since on aarch64 there is not halt instruction,
 //!             // we break immediately after the last known instruction
 //!             // of the asm code example so that we avoid an infinite loop.
-//!             #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+//!             #[cfg(any(target_arch = "aarch64", target_arch = "riscv64", target_arch = "loongarch64"))]
 //!             break;
 //!         }
 //!         VcpuExit::Hlt => {
@@ -235,7 +252,11 @@ mod ioctls;
 pub use cap::Cap;
 pub use ioctls::device::DeviceFd;
 pub use ioctls::system::Kvm;
-#[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "loongarch64"
+))]
 pub use ioctls::vcpu::reg_size;
 pub use ioctls::vcpu::{HypercallExit, VcpuExit, VcpuFd};
 

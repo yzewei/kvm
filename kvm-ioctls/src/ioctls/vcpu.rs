@@ -27,7 +27,11 @@ use {
 };
 
 /// Helper method to obtain the size of the register through its id
-#[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+#[cfg(any(
+    target_arch = "aarch64",
+    target_arch = "riscv64",
+    target_arch = "loongarch64",
+))]
 pub fn reg_size(reg_id: u64) -> usize {
     2_usize.pow(((reg_id & KVM_REG_SIZE_MASK) >> KVM_REG_SIZE_SHIFT) as u32)
 }
@@ -337,8 +341,14 @@ impl VcpuFd {
     ///
     /// // Get the current vCPU registers.
     /// let mut regs = vcpu.get_regs().unwrap();
-    /// // Set a new value for the Instruction Pointer.
-    /// regs.rip = 0x100;
+    /// #[cfg(target_arch = "x86_64")]
+    /// {
+    ///     regs.rip = 0x100;
+    /// }
+    /// #[cfg(target_arch = "loongarch64")]
+    /// {
+    ///     regs.pc = 0x100;
+    /// }
     /// vcpu.set_regs(&regs).unwrap();
     /// ```
     #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64")))]
@@ -426,7 +436,7 @@ impl VcpuFd {
     /// let vcpu = vm.create_vcpu(0).unwrap();
     /// let fpu = vcpu.get_fpu().unwrap();
     /// ```
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "loongarch64"))]
     pub fn get_fpu(&self) -> Result<kvm_fpu> {
         let mut fpu = kvm_fpu::default();
         // SAFETY: Here we trust the kernel not to read past the end of the kvm_fpu struct.
@@ -453,14 +463,19 @@ impl VcpuFd {
     /// let vm = kvm.create_vm().unwrap();
     /// let vcpu = vm.create_vcpu(0).unwrap();
     ///
-    /// let KVM_FPU_CWD: u16 = 0x37f;
-    /// let fpu = kvm_fpu {
-    ///     fcw: KVM_FPU_CWD,
-    ///     ..Default::default()
-    /// };
+    /// let mut fpu = kvm_fpu::default();
+    /// #[cfg(target_arch = "x86_64")]
+    /// {
+    ///     let kvm_fpu_cwd: u16 = 0x37f;
+    ///     fpu.cwd = kvm_fpu_cwd;
+    /// }
+    /// #[cfg(target_arch = "loongarch64")]
+    /// {
+    ///     fpu.fcsr = 0;
+    /// }
     /// vcpu.set_fpu(&fpu).unwrap();
     /// ```
-    #[cfg(target_arch = "x86_64")]
+    #[cfg(any(target_arch = "x86_64", target_arch = "loongarch64"))]
     pub fn set_fpu(&self, fpu: &kvm_fpu) -> Result<()> {
         // SAFETY: Here we trust the kernel not to read past the end of the kvm_fpu struct.
         let ret = unsafe { ioctl_with_ref(self, KVM_SET_FPU(), fpu) };
@@ -766,7 +781,8 @@ impl VcpuFd {
         target_arch = "x86_64",
         target_arch = "aarch64",
         target_arch = "riscv64",
-        target_arch = "s390x"
+        target_arch = "s390x",
+        target_arch = "loongarch64"
     ))]
     pub fn get_mp_state(&self) -> Result<kvm_mp_state> {
         let mut mp_state = Default::default();
@@ -802,7 +818,8 @@ impl VcpuFd {
         target_arch = "x86_64",
         target_arch = "aarch64",
         target_arch = "riscv64",
-        target_arch = "s390x"
+        target_arch = "s390x",
+        target_arch = "loongarch64"
     ))]
     pub fn set_mp_state(&self, mp_state: kvm_mp_state) -> Result<()> {
         // SAFETY: Here we trust the kernel not to read past the end of the kvm_mp_state struct.
@@ -1370,7 +1387,11 @@ impl VcpuFd {
     ///
     /// `data` should be equal or bigger then the register size
     /// oterwise function will return EINVAL error
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+    ))]
     pub fn set_one_reg(&self, reg_id: u64, data: &[u8]) -> Result<usize> {
         let reg_size = reg_size(reg_id);
         if data.len() < reg_size {
@@ -1402,7 +1423,11 @@ impl VcpuFd {
     ///
     /// `data` should be equal or bigger then the register size
     /// oterwise function will return EINVAL error
-    #[cfg(any(target_arch = "aarch64", target_arch = "riscv64"))]
+    #[cfg(any(
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "loongarch64",
+    ))]
     pub fn get_one_reg(&self, reg_id: u64, data: &mut [u8]) -> Result<usize> {
         let reg_size = reg_size(reg_id);
         if data.len() < reg_size {
@@ -1476,7 +1501,9 @@ impl VcpuFd {
     ///     userspace_addr: load_addr as u64,
     ///     flags: 0,
     /// };
-    /// unsafe { vm.set_user_memory_region(mem_region).unwrap() };
+    /// unsafe { vm.set_user_memory_region(mem_region).expect("set_user_memory_region failed") };
+
+    /// let mut vcpu_fd = vm.create_vcpu(0).expect("create_vcpu failed");
     ///
     /// // Dummy x86 code that just calls halt.
     /// let x86_code = [0xf4 /* hlt */];
@@ -2584,7 +2611,7 @@ mod tests {
             guest_phys_addr: guest_addr,
             memory_size: mem_size as u64,
             userspace_addr: load_addr as u64,
-            flags: KVM_MEM_LOG_DIRTY_PAGES,
+            flags: 0,
         };
         unsafe {
             vm.set_user_memory_region(mem_region).unwrap();
@@ -2637,6 +2664,75 @@ mod tests {
                     assert_eq!(data[0], 0x7);
                     // The code snippet dirties one page at guest_addr + 0x10000.
                     // The code page should not be dirty, as it's not written by the guest.
+                    let dirty_pages_bitmap = vm.get_dirty_log(slot, mem_size).unwrap();
+                    let dirty_pages: u32 = dirty_pages_bitmap
+                        .into_iter()
+                        .map(|page| page.count_ones())
+                        .sum();
+                    assert_eq!(dirty_pages, 1);
+                    break;
+                }
+                r => panic!("unexpected exit reason: {:?}", r),
+            }
+        }
+    }
+    #[cfg(target_arch = "loongarch64")]
+    #[test]
+    fn test_run_code() {
+        use::std::io::Write;
+
+        let kvm = Kvm::new().unwrap();
+        let vm = kvm.create_vm().unwrap();
+
+        #[rustfmt::skip]
+        let code = [
+            0x8e, 0x01, 0x80, 0x29, // st.w $t2, $t0, 0
+            0xae, 0x01, 0x80, 0x29, // st.w $t2, $t1, 0
+            0x00, 0x00, 0x00, 0x50, // b .
+        ];
+
+        let mem_size = 0x10000;
+        let guest_addr: u64 = 0x10000;
+        let load_addr = mmap_anonymous(mem_size).as_ptr();
+        let slot: u32 = 0;
+
+        let mem_region = kvm_userspace_memory_region {
+            slot,
+            guest_phys_addr: guest_addr,
+            memory_size: mem_size as u64,
+            userspace_addr: load_addr as u64,
+            flags: KVM_MEM_LOG_DIRTY_PAGES,
+        };
+        unsafe {
+            vm.set_user_memory_region(mem_region).unwrap();
+        }
+
+        unsafe {
+            let mut slice = std::slice::from_raw_parts_mut(load_addr, mem_size);
+            slice.write_all(&code).unwrap();
+        }
+
+        let mut vcpu_fd = vm.create_vcpu(0).unwrap();
+
+        let mmio_addr: u64 = guest_addr + mem_size as u64;
+
+        let mut regs = vcpu_fd.get_regs().unwrap();
+        regs.pc = guest_addr;
+        regs.gpr[12] = guest_addr + 0x20; // t0: RAM address
+        regs.gpr[13] = mmio_addr;         // t1: MMIO address
+        regs.gpr[14] = 1;                 // t2: store value
+        vcpu_fd.set_regs(&regs).unwrap();
+
+        loop {
+            match vcpu_fd.run().expect("run failed") {
+                VcpuExit::MmioWrite(addr, data) => {
+                    assert_eq!(addr, mmio_addr);
+                    assert_eq!(data.len(), 4);
+                    assert_eq!(data[0], 1);
+                    assert_eq!(data[1], 0);
+                    assert_eq!(data[2], 0);
+                    assert_eq!(data[3], 0);
+
                     let dirty_pages_bitmap = vm.get_dirty_log(slot, mem_size).unwrap();
                     let dirty_pages: u32 = dirty_pages_bitmap
                         .into_iter()
@@ -2957,6 +3053,99 @@ mod tests {
         let mut reg_list = RegList::new(200).unwrap();
         vcpu.get_reg_list(&mut reg_list).unwrap();
     }
+
+    #[cfg(target_arch = "loongarch64")]
+    const KVM_REG_LOONGARCH_CPUCFG: u64 = (KVM_REG_LOONGARCH as u64) | 0x40000;
+
+    #[cfg(target_arch = "loongarch64")]
+    const CPUCFG0_REG_ID: u64 =
+        KVM_REG_LOONGARCH_CPUCFG | KVM_REG_SIZE_U64 | (0_u64 << LOONGARCH_REG_SHIFT);
+
+    #[cfg(target_arch = "loongarch64")]
+    const KVM_REG_LOONGARCH_CSR: u64 = (KVM_REG_LOONGARCH as u64) | 0x10000;
+
+    #[cfg(target_arch = "loongarch64")]
+    const LOONGARCH_CSR_ECFG: u64 = 0x4;
+
+    #[cfg(target_arch = "loongarch64")]
+    const CSR_ECFG_REG_ID: u64 =
+        KVM_REG_LOONGARCH_CSR | KVM_REG_SIZE_U64 | (LOONGARCH_CSR_ECFG << LOONGARCH_REG_SHIFT);
+    #[test]
+    #[cfg(target_arch = "loongarch64")]
+    fn test_set_one_reg(){
+        let kvm = Kvm::new().unwrap();
+        let vm = kvm.create_vm().unwrap();
+        let vcpu = vm.create_vcpu(0).unwrap();
+
+        let data: u64 = 0x1234_5678;
+        let invalid_reg_id: u64 = 0;
+
+        vcpu.set_one_reg(invalid_reg_id, &data.to_le_bytes()).unwrap_err();
+        vcpu.set_one_reg(CPUCFG0_REG_ID, &data.to_le_bytes())
+            .expect("Failed to set CPUCFG0 register");
+
+        vcpu.set_one_reg(CPUCFG0_REG_ID, &[0_u8; 7]).unwrap_err();
+    }
+
+    #[test]
+    #[cfg(target_arch = "loongarch64")]
+    fn test_get_one_reg(){
+        let kvm = Kvm::new().unwrap();
+        let vm = kvm.create_vm().unwrap();
+        let vcpu = vm.create_vcpu(0).unwrap();
+
+        let preset: u64 = 0x1234_5678;
+
+        vcpu.set_one_reg(CPUCFG0_REG_ID, &preset.to_le_bytes())
+            .expect("Failed to set CPUCFG0 register");
+
+        let mut bytes = [0_u8; 8];
+        vcpu.get_one_reg(CPUCFG0_REG_ID, &mut bytes)
+            .expect("Failed to get CPUCFG0 register");
+
+        let value = u64::from_le_bytes(bytes);
+        assert_eq!(value, preset);
+
+        vcpu.get_one_reg(CPUCFG0_REG_ID, &mut [0_u8; 7]).unwrap_err();
+    }
+
+    #[test]
+    #[cfg(target_arch = "loongarch64")]
+    fn test_set_one_reg_csr() {
+        let kvm = Kvm::new().unwrap();
+        let vm = kvm.create_vm().unwrap();
+        let vcpu = vm.create_vcpu(0).unwrap();
+
+        let data: u64 = 0x1234_5678_9abc_def0;
+
+        vcpu.set_one_reg(CSR_ECFG_REG_ID, &data.to_le_bytes())
+            .expect("Failed to set CSR_ECFG register");
+
+        vcpu.set_one_reg(CSR_ECFG_REG_ID, &[0_u8; 7]).unwrap_err();
+    }
+
+    #[test]
+    #[cfg(target_arch = "loongarch64")]
+    fn test_get_one_reg_csr() {
+        let kvm = Kvm::new().unwrap();
+        let vm = kvm.create_vm().unwrap();
+        let vcpu = vm.create_vcpu(0).unwrap();
+
+        let preset: u64 = 0x1234_5678_9abc_def0;
+
+        vcpu.set_one_reg(CSR_ECFG_REG_ID, &preset.to_le_bytes())
+            .expect("Failed to set CSR_ECFG register");
+
+        let mut bytes = [0_u8; 8];
+        vcpu.get_one_reg(CSR_ECFG_REG_ID, &mut bytes)
+            .expect("Failed to get CSR_ECFG register");
+
+        let value = u64::from_le_bytes(bytes);
+        assert_eq!(value, preset);
+
+        vcpu.get_one_reg(CSR_ECFG_REG_ID, &mut [0_u8; 7]).unwrap_err();
+    }
+
 
     #[test]
     fn test_get_kvm_run() {
