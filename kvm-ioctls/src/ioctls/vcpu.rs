@@ -118,6 +118,12 @@ pub enum VcpuExit<'a> {
     MmioRead(u64 /* address */, &'a mut [u8]),
     /// A write instruction was run against the given MMIO address with the given data.
     MmioWrite(u64 /* address */, &'a [u8]),
+    /// KVM_EXIT_LOONGARCHIOCSR needed
+    #[cfg(target_arch = "loongarch64")]
+    IocsrRead(u64 /* address */, &'a mut [u8]),
+    /// A write instruction was run against the given LoongArch IOCSR address with the given data.
+    #[cfg(target_arch = "loongarch64")]
+    IocsrWrite(u64 /* address */, &'a [u8]),
     /// Corresponds to KVM_EXIT_UNKNOWN.
     Unknown,
     /// Corresponds to KVM_EXIT_EXCEPTION.
@@ -1600,6 +1606,21 @@ impl VcpuFd {
                         Ok(VcpuExit::MmioWrite(addr, data_slice))
                     } else {
                         Ok(VcpuExit::MmioRead(addr, data_slice))
+                    }
+                }
+                #[cfg(target_arch = "loongarch64")]
+                KVM_EXIT_LOONGARCH_IOCSR => {
+                    let iocsr = unsafe { &mut run.__bindgen_anon_1.iocsr_io };
+                    let addr = iocsr.phys_addr;
+                    let len = iocsr.len as usize;
+                    if len > iocsr.data.len() {
+                        return Err(errno::Error::new(EINVAL));
+                    }
+                    let data_slice = &mut iocsr.data[..len];
+                    if iocsr.is_write != 0 {
+                        Ok(VcpuExit::IocsrWrite(addr, data_slice))
+                    } else {
+                        Ok(VcpuExit::IocsrRead(addr, data_slice))
                     }
                 }
                 KVM_EXIT_X86_RDMSR => {

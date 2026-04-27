@@ -15,18 +15,17 @@ use std::os::raw::c_void;
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
-    target_arch = "riscv64"
+    target_arch = "riscv64",
+    target_arch = "loongarch64"
 ))]
 use std::os::raw::{c_int, c_ulong};
-#[cfg(target_arch = "loongarch64")]
-use std::os::raw::c_ulong;
 use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 
 use crate::cap::Cap;
-use crate::ioctls::device::DeviceFd;
 use crate::ioctls::device::new_device;
-use crate::ioctls::vcpu::VcpuFd;
+use crate::ioctls::device::DeviceFd;
 use crate::ioctls::vcpu::new_vcpu;
+use crate::ioctls::vcpu::VcpuFd;
 use crate::ioctls::{KvmRunWrapper, Result};
 use crate::kvm_ioctls::*;
 use vmm_sys_util::errno;
@@ -719,7 +718,8 @@ impl VmFd {
     #[cfg(any(
         target_arch = "x86_64",
         target_arch = "aarch64",
-        target_arch = "riscv64"
+        target_arch = "riscv64",
+        target_arch = "loongarch64"
     ))]
     pub fn signal_msi(&self, msi: kvm_msi) -> Result<c_int> {
         // SAFETY: Safe because we allocated the structure and we know the kernel
@@ -768,13 +768,22 @@ impl VmFd {
     /// })
     /// .expect("Cannot create KVM vAIA device.");
     ///
+    /// #[cfg(target_arch = "loongarch64")]
+    /// vm.create_device(&mut kvm_bindings::kvm_create_device {
+    ///     type_: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_LOONGARCH_EIOINTC,
+    ///     fd: 0,
+    ///     flags: 0,
+    /// })
+    /// .expect("Cannot create KVM EIOINTC device.");
+    ///
     /// let irq_routing = KvmIrqRouting::new(0).unwrap();
     /// vm.set_gsi_routing(&irq_routing).unwrap();
     /// ```
     #[cfg(any(
         target_arch = "x86_64",
         target_arch = "aarch64",
-        target_arch = "riscv64"
+        target_arch = "riscv64",
+        target_arch = "loongarch64"
     ))]
     pub fn set_gsi_routing(&self, irq_routing: &KvmIrqRouting) -> Result<()> {
         // SAFETY: Safe because we allocated the structure and we know the kernel
@@ -1143,7 +1152,8 @@ impl VmFd {
     #[cfg(any(
         target_arch = "x86_64",
         target_arch = "aarch64",
-        target_arch = "riscv64"
+        target_arch = "riscv64",
+        target_arch = "loongarch64"
     ))]
     pub fn register_irqfd(&self, fd: &EventFd, gsi: u32) -> Result<()> {
         let irqfd = kvm_irqfd {
@@ -1194,7 +1204,8 @@ impl VmFd {
     #[cfg(any(
         target_arch = "x86_64",
         target_arch = "aarch64",
-        target_arch = "riscv64"
+        target_arch = "riscv64",
+        target_arch = "loongarch64"
     ))]
     pub fn register_irqfd_with_resample(
         &self,
@@ -1252,7 +1263,8 @@ impl VmFd {
     #[cfg(any(
         target_arch = "x86_64",
         target_arch = "aarch64",
-        target_arch = "riscv64"
+        target_arch = "riscv64",
+        target_arch = "loongarch64"
     ))]
     pub fn unregister_irqfd(&self, fd: &EventFd, gsi: u32) -> Result<()> {
         let irqfd = kvm_irqfd {
@@ -1322,7 +1334,8 @@ impl VmFd {
     #[cfg(any(
         target_arch = "x86_64",
         target_arch = "aarch64",
-        target_arch = "riscv64"
+        target_arch = "riscv64",
+        target_arch = "loongarch64"
     ))]
     pub fn set_irq_line(&self, irq: u32, active: bool) -> Result<()> {
         let mut irq_level = kvm_irq_level::default();
@@ -1443,19 +1456,21 @@ impl VmFd {
     /// // whether the device type is supported. This will not create the device.
     /// // To create the device the flag needs to be removed.
     /// let mut device = kvm_bindings::kvm_create_device {
-    ///     #[cfg(any(target_arch = "x86_64", target_arch = "loongarch64"))]
+    ///     #[cfg(target_arch = "x86_64")]
     ///     type_: kvm_device_type_KVM_DEV_TYPE_VFIO,
     ///     #[cfg(target_arch = "aarch64")]
     ///     type_: kvm_device_type_KVM_DEV_TYPE_ARM_VGIC_V3,
     ///     #[cfg(target_arch = "riscv64")]
     ///     type_: kvm_device_type_KVM_DEV_TYPE_RISCV_AIA,
+    ///     #[cfg(target_arch = "loongarch64")]
+    ///     type_: kvm_bindings::kvm_device_type_KVM_DEV_TYPE_LOONGARCH_IPI,
     ///     fd: 0,
     ///     flags: KVM_CREATE_DEVICE_TEST,
     /// };
     /// // On ARM, creating VGICv3 may fail due to hardware dependency.
     /// // Retry to create VGICv2 in that case.
     /// let device_fd = vm.create_device(&mut device).unwrap_or_else(|_| {
-    ///     #[cfg(any(target_arch = "x86_64", target_arch = "loongarch64"))]
+    ///     #[cfg(target_arch = "x86_64")]
     ///     panic!("Cannot create VFIO device.");
     ///     #[cfg(target_arch = "aarch64")]
     ///     {
@@ -1465,6 +1480,8 @@ impl VmFd {
     ///     }
     ///     #[cfg(target_arch = "riscv64")]
     ///     panic!("Cannot create vAIA device.");
+    ///     #[cfg(target_arch = "loongarch64")]
+    ///     panic!("Cannot create IPI device.");
     /// });
     /// ```
     pub fn create_device(&self, device: &mut kvm_create_device) -> Result<DeviceFd> {
@@ -2299,6 +2316,60 @@ pub(crate) fn request_aia_init(vaia: &DeviceFd) {
     vaia.set_device_attr(&vaia_attr).unwrap();
 }
 
+/// Create a dummy IPI device.
+///
+/// # Arguments
+///
+/// * `vm` - The vm file descriptor.
+/// * `flags` - Flags to be passed to `KVM_CREATE_DEVICE`.
+#[cfg(test)]
+#[cfg(target_arch = "loongarch64")]
+pub(crate) fn create_ipi_device(vm: &VmFd, flags: u32) -> DeviceFd {
+    let mut ipi_device = kvm_create_device {
+        type_: kvm_device_type_KVM_DEV_TYPE_LOONGARCH_IPI,
+        fd: 0,
+        flags,
+    };
+    vm.create_device(&mut ipi_device)
+        .expect("Cannot create KVM IPI device")
+}
+
+/// Create a dummy EIOINTC device.
+///
+/// # Arguments
+///
+/// * `vm` - The vm file descriptor.
+/// * `flags` - Flags to be passed to `KVM_CREATE_DEVICE`.
+#[cfg(test)]
+#[cfg(target_arch = "loongarch64")]
+pub(crate) fn create_eiointc_device(vm: &VmFd, flags: u32) -> DeviceFd {
+    let mut eiointc_device = kvm_create_device {
+        type_: kvm_device_type_KVM_DEV_TYPE_LOONGARCH_EIOINTC,
+        fd: 0,
+        flags,
+    };
+    vm.create_device(&mut eiointc_device)
+        .expect("Cannot create KVM EIOINTC device")
+}
+
+/// Create a dummy PCHPIC device.
+///
+/// # Arguments
+///
+/// * `vm` - The vm file descriptor.
+/// * `flags` - Flags to be passed to `KVM_CREATE_DEVICE`.
+#[cfg(test)]
+#[cfg(target_arch = "loongarch64")]
+pub(crate) fn create_pchpic_device(vm: &VmFd, flags: u32) -> DeviceFd {
+    let mut pchpic_device = kvm_create_device {
+        type_: kvm_device_type_KVM_DEV_TYPE_LOONGARCH_PCHPIC,
+        fd: 0,
+        flags,
+    };
+    vm.create_device(&mut pchpic_device)
+        .expect("Cannot create KVM PCHPIC device")
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::undocumented_unsafe_blocks)]
@@ -2670,6 +2741,35 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_arch = "loongarch64")]
+    fn test_register_unregister_irqfd() {
+        let kvm = Kvm::new().unwrap();
+        let vm_fd = kvm.create_vm().unwrap();
+        let evtfd1 = EventFd::new(EFD_NONBLOCK).unwrap();
+        let evtfd2 = EventFd::new(EFD_NONBLOCK).unwrap();
+        let evtfd3 = EventFd::new(EFD_NONBLOCK).unwrap();
+
+        create_ipi_device(&vm_fd, 0);
+        create_eiointc_device(&vm_fd, 0);
+        create_pchpic_device(&vm_fd, 0);
+        vm_fd.create_vcpu(0).unwrap();
+
+        vm_fd.register_irqfd(&evtfd1, 4).unwrap();
+        vm_fd.register_irqfd(&evtfd2, 8).unwrap();
+        vm_fd.register_irqfd(&evtfd3, 4).unwrap();
+        vm_fd.unregister_irqfd(&evtfd2, 8).unwrap();
+        // KVM irqfd doesn't report failure on this case:(
+        vm_fd.unregister_irqfd(&evtfd2, 8).unwrap();
+
+        // Duplicated eventfd registration.
+        // On loongarch64 this fails as the event fd was already matched with a GSI.
+        vm_fd.register_irqfd(&evtfd3, 4).unwrap_err();
+        vm_fd.register_irqfd(&evtfd3, 5).unwrap_err();
+        // KVM irqfd doesn't report failure on this case:(
+        vm_fd.unregister_irqfd(&evtfd3, 5).unwrap();
+    }
+
+    #[test]
     #[cfg(target_arch = "x86_64")]
     fn test_set_irq_line() {
         let kvm = Kvm::new().unwrap();
@@ -2750,6 +2850,22 @@ mod tests {
 
         // Initialize valid vAIA device.
         request_aia_init(&vaia_fd);
+
+        vm_fd.set_irq_line(7, true).unwrap();
+        vm_fd.set_irq_line(7, false).unwrap();
+        vm_fd.set_irq_line(7, true).unwrap();
+    }
+
+    #[test]
+    #[cfg(target_arch = "loongarch64")]
+    fn test_set_irq_line() {
+        let kvm = Kvm::new().unwrap();
+        let vm_fd = kvm.create_vm().unwrap();
+        vm_fd.create_vcpu(0).unwrap();
+
+        create_ipi_device(&vm_fd, 0);
+        create_eiointc_device(&vm_fd, 0);
+        create_pchpic_device(&vm_fd, 0);
 
         vm_fd.set_irq_line(7, true).unwrap();
         vm_fd.set_irq_line(7, false).unwrap();
@@ -2875,7 +2991,8 @@ mod tests {
     #[cfg(any(
         target_arch = "x86_64",
         target_arch = "aarch64",
-        target_arch = "riscv64"
+        target_arch = "riscv64",
+        target_arch = "loongarch64"
     ))]
     fn test_signal_msi_failure() {
         let kvm = Kvm::new().unwrap();
@@ -2885,7 +3002,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "riscv64", target_arch = "loongarch64")))]
+    #[cfg(not(any(
+        target_arch = "aarch64",
+        target_arch = "riscv64",
+        target_arch = "loongarch64"
+    )))]
     fn test_enable_cap_failure() {
         let kvm = Kvm::new().unwrap();
         let vm = kvm.create_vm().unwrap();
@@ -2923,7 +3044,8 @@ mod tests {
     #[cfg(any(
         target_arch = "x86_64",
         target_arch = "aarch64",
-        target_arch = "riscv64"
+        target_arch = "riscv64",
+        target_arch = "loongarch64"
     ))]
     fn test_set_gsi_routing() {
         let kvm = Kvm::new().unwrap();
@@ -2940,6 +3062,11 @@ mod tests {
         // committing irq_routing table.
         #[cfg(target_arch = "riscv64")]
         create_aia_device(&vm, 0);
+
+        // LoongArch 64-bit expect an EIOINTC device to be created in advance of
+        // committing irq_routing table.
+        #[cfg(target_arch = "loongarch64")]
+        create_eiointc_device(&vm, 0);
 
         vm.set_gsi_routing(&irq_routing).unwrap();
     }

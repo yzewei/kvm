@@ -242,7 +242,8 @@ ioctl_iow_nr!(KVM_ENABLE_CAP, KVMIO, 0xa3, kvm_enable_cap);
 #[cfg(any(
     target_arch = "x86_64",
     target_arch = "aarch64",
-    target_arch = "riscv64"
+    target_arch = "riscv64",
+    target_arch = "loongarch64"
 ))]
 ioctl_iow_nr!(KVM_SIGNAL_MSI, KVMIO, 0xa5, kvm_msi);
 /* Available with KVM_CAP_ONE_REG */
